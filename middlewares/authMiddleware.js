@@ -1,17 +1,17 @@
-const jwt = require('jsonwebtoken')
+const jwt = require('jsonwebtoken');
 
 const autenticarJWT = (req, res, next) => {
-  const authHeader = req.headers['authorization']
-  if (!authHeader) return res.status(401).json({ erro: 'Token não fornecido.' })
+  const authHeader = req.headers['authorization'];
+  const token = authHeader?.split(' ')[1];
 
-  const token = authHeader.split(' ')[1] // Bearer <token>
-  if (!token) return res.status(401).json({ erro: 'Token mal formatado.' })
+  if (!token) return res.status(401).json({ erro: 'Token não fornecido.' });
 
-  jwt.verify(token, process.env.JWT_ACCESS_SECRET, (err, payload) => {
-    if (err) return res.status(401).json({ erro: 'Token inválido.' })
-    req.user = payload // salva os dados do usuário no request para usar depois
-    next()
-  })
-}
+  jwt.verify(token, process.env.JWT_ACCESS_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ erro: 'Token inválido.' });
 
-module.exports = autenticarJWT
+    req.user = user;
+    next();
+  });
+};
+
+module.exports = { autenticarJWT };

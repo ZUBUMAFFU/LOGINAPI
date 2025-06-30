@@ -1,16 +1,21 @@
-const pool = require('../utils/db')
+const pool = require('../utils/db');
 
-const buscarPorEmail = async (email) => {
-    const [rows] = await pool.query('SELECT * FROM usuarios WHERE email = ?', [email])
-    return rows[0]
-}
+const buscarPorCpf = async (cpf) => {
+    const [rows] = await pool.query(
+        'SELECT * FROM usuarios WHERE cpf = ?',
+        [cpf]
+    );
+    return rows[0];
+};
 
-const criarUsuario = async (email, senhaHash) => {
-    const rolePadrao = 2 // ID do role "user"
-    return await pool.query(
-        'INSERT INTO usuarios (email, senha_hash, role_id) VALUES (?, ?, ?)',
-        [email, senhaHash, rolePadrao]
-    )
-}
+const criarUsuario = async (nome, cpf, senhaHash, roleId) => {
+  const [resultado] = await pool.query(
+    'INSERT INTO usuarios (nome, cpf, senha_hash, role_id) VALUES (?, ?, ?, ?)',
+    [nome, cpf, senhaHash, roleId]
+  );
+  return resultado;
+};
 
-module.exports = { buscarPorEmail, criarUsuario }
+module.exports = { buscarPorCpf, criarUsuario };
+
+

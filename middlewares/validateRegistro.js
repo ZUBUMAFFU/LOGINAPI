@@ -1,12 +1,12 @@
 module.exports = (req, res, next) => {
-    const { email, senha } = req.body || {};
+  const { nome,cpf, senha } = req.body || {};
 
-    if (!email || !senha) return res.status(400).json({ erro: 'Email e senha são obrigatórios.' });
+  if (!nome || !cpf || !senha) return res.status(400).json({ erro: 'Nome,CPF e senha são obrigatórios.' });
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) return res.status(400).json({ erro: 'Email inválido.' });
+  const cpfRegex = /^\d{11}$/;
+  if (!cpfRegex.test(cpf)) return res.status(400).json({ erro: 'CPF inválido. Deve conter 11 dígitos numéricos.' });
 
-    if (senha.length < 6) return res.status(400).json({ erro: 'Senha deve ter no mínimo 6 caracteres.' });
+  if (senha.length < 6) return res.status(400).json({ erro: 'Senha deve ter no mínimo 6 caracteres.' });
 
-    next();
+  next();
 };
