@@ -1,6 +1,7 @@
 const express = require('express');
 const { autenticarJWT } = require('./middlewares/authMiddleware');
 const cors = require('cors');
+const ExcelJS = require('exceljs');
 require('dotenv').config();
 const app = express();
 
@@ -433,6 +434,7 @@ app.get('/ficha_extrusao', autenticarJWT, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar fichas de extrusão.' });
   }
 });
+//rota para adicionar ficha de extrusão
 app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
   const connection = await pool.getConnection();
   
@@ -509,6 +511,549 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
       erro: 'Erro ao adicionar ficha de extrusão.',
       detalhes: process.env.NODE_ENV === 'development' ? err.message : null
     });
+  } finally {
+    connection.release();
+  }
+});
+//buscar ficha de corte
+app.get('/ficha_corte', autenticarJWT, async (req, res) => {
+  try {
+    const [fichas] = await pool.query('SELECT * FROM work_ficha');
+    res.json(fichas);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar fichas de extrusão.' });
+  }
+});
+//rota para adicionar ficha de corte
+app.post('/ficha_corte/add', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+    const { 
+      operador_nome,
+      operador_cpf,
+      maquina,
+      turno,               // <-- novo campo
+      sacola_dim,
+      total,
+      aparas,
+      obs
+    } = req.body;
+
+    if (!operador_nome || !operador_cpf || !sacola_dim || !total || !turno) {
+      return res.status(400).json({ erro: 'Campos obrigatórios não preenchidos.' });
+    }
+
+    const totalNum = parseFloat(total);
+    const aparasNum = aparas !== undefined ? parseFloat(aparas) : null;
+
+    if (isNaN(totalNum)) {
+      return res.status(400).json({ erro: 'O total deve ser um número válido.' });
+    }
+
+    await connection.beginTransaction();
+
+    const [result] = await connection.query(
+      `INSERT INTO corte_ficha 
+        (operador_nome, operador_cpf, maquina, turno, sacola_dim, total, aparas, obs, preenchido_em)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        operador_nome,
+        operador_cpf,
+        maquina,
+        turno,
+        sacola_dim,
+        totalNum,
+        aparasNum,
+        obs || null
+      ]
+    );
+
+    await connection.commit();
+
+    res.status(201).json({ 
+      mensagem: 'Ficha de corte adicionada com sucesso.', 
+      fichaId: result.insertId 
+    });
+  } catch (err) {
+    await connection.rollback();
+
+    console.error('Erro ao adicionar ficha de corte:', {
+      erro: err.message,
+      stack: err.stack,
+      body: req.body,
+      timestamp: new Date().toISOString()
+    });
+
+    res.status(500).json({ 
+      erro: 'Erro ao adicionar ficha de corte.',
+      detalhes: process.env.NODE_ENV === 'development' ? err.message : null
+    });
+  } finally {
+    connection.release();
+  }
+});
+
+
+//rota para relatorio de extrusão por periodo
+app.post('/relatorio/extrusao', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const { data_inicio, data_fim } = req.body;
+
+    if (!data_inicio || !data_fim) {
+      return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios.' });
+    }
+
+    const query = `
+      SELECT * FROM work_ficha 
+      WHERE preenchido_em BETWEEN ? AND ?
+    `;
+    const [dados] = await connection.query(query, [data_inicio, data_fim]);
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Extrusão');
+
+    // ... (mesmo código para montar a planilha e adicionar os dados, bordas, totais) ...
+
+    // Estilo de borda
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    sheet.columns = [
+      { header: 'data', key: 'preenchido_em', width: 15 },
+      { header: 'nome', key: 'operador_nome', width: 25 },
+      { header: 'cpf', key: 'operador_cpf', width: 18 },
+      { header: 'maquina', key: 'operador_maquina', width: 20 },
+      { header: 'inicio', key: 'inicio', width: 12 },
+      { header: 'termino', key: 'termino', width: 12 },
+      { header: 'produto', key: 'produto', width: 18 },
+      { header: 'peso', key: 'peso', width: 10 },
+      { header: 'aparas', key: 'aparas', width: 10 },
+      { header: 'obs', key: 'obs', width: 30 },
+    ];
+
+    // Cabeçalho estilizado
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF00B050' }
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    let totalPeso = 0;
+    let totalAparas = 0;
+
+    dados.forEach(d => {
+      const row = sheet.addRow(d);
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+      totalPeso += Number(d.peso || 0);
+      totalAparas += Number(d.aparas || 0);
+    });
+
+    const ultimaLinha = sheet.rowCount + 2;
+
+    // Total Geral
+    sheet.mergeCells(`F${ultimaLinha}:G${ultimaLinha}`);
+    sheet.getCell(`F${ultimaLinha}`).value = 'Total Geral:';
+    sheet.getCell(`F${ultimaLinha}`).font = { bold: true };
+    sheet.getCell(`F${ultimaLinha}`).alignment = { horizontal: 'right' };
+    sheet.getCell(`F${ultimaLinha}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF00B050' }
+    };
+    sheet.getCell(`H${ultimaLinha}`).value = totalPeso;
+    sheet.getCell(`H${ultimaLinha}`).font = { bold: true };
+    sheet.getCell(`H${ultimaLinha}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF99' }
+    };
+
+    // Total Aparas
+    sheet.mergeCells(`F${ultimaLinha + 1}:G${ultimaLinha + 1}`);
+    sheet.getCell(`F${ultimaLinha + 1}`).value = 'Total de Aparas:';
+    sheet.getCell(`F${ultimaLinha + 1}`).font = { bold: true };
+    sheet.getCell(`F${ultimaLinha + 1}`).alignment = { horizontal: 'right' };
+    sheet.getCell(`F${ultimaLinha + 1}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF00B050' }
+    };
+    sheet.getCell(`H${ultimaLinha + 1}`).value = totalAparas;
+    sheet.getCell(`H${ultimaLinha + 1}`).font = { bold: true };
+    sheet.getCell(`H${ultimaLinha + 1}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF99' }
+    };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_extrusao.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+
+///////////////////////
+
+//rota para relatorio de extrusão
+app.get('/relatorio/extrusao', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const [dados] = await connection.query('SELECT * FROM work_ficha');
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Extrusão');
+
+    // Estilo de borda
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    // Cabeçalho
+    sheet.columns = [
+      { header: 'data', key: 'preenchido_em', width: 15 },
+      { header: 'nome', key: 'operador_nome', width: 25 },
+      { header: 'cpf', key: 'operador_cpf', width: 18 },
+      { header: 'maquina', key: 'operador_maquina', width: 20 },
+      { header: 'inicio', key: 'inicio', width: 12 },
+      { header: 'termino', key: 'termino', width: 12 },
+      { header: 'produto', key: 'produto', width: 18 },
+      { header: 'peso', key: 'peso', width: 10 },
+      { header: 'aparas', key: 'aparas', width: 10 },
+      { header: 'obs', key: 'obs', width: 30 },
+    ];
+
+    // Estilo do cabeçalho
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF00B050' } // Verde
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; // Branco
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    // Adicionar dados e somatórios
+    let totalPeso = 0;
+    let totalAparas = 0;
+
+    dados.forEach(d => {
+      const row = sheet.addRow(d);
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+      totalPeso += Number(d.peso || 0);
+      totalAparas += Number(d.aparas || 0);
+    });
+
+    const ultimaLinha = sheet.rowCount + 2;
+
+    // Total Geral
+    sheet.mergeCells(`F${ultimaLinha}:G${ultimaLinha}`);
+    sheet.getCell(`F${ultimaLinha}`).value = 'Total Geral:';
+    sheet.getCell(`F${ultimaLinha}`).font = { bold: true };
+    sheet.getCell(`F${ultimaLinha}`).alignment = { horizontal: 'right' };
+    sheet.getCell(`F${ultimaLinha}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF00B050' }
+    };
+    sheet.getCell(`H${ultimaLinha}`).value = totalPeso;
+    sheet.getCell(`H${ultimaLinha}`).font = { bold: true };
+    sheet.getCell(`H${ultimaLinha}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF99' } // Amarelo claro
+    };
+
+    // Total Aparas
+    sheet.mergeCells(`F${ultimaLinha + 1}:G${ultimaLinha + 1}`);
+    sheet.getCell(`F${ultimaLinha + 1}`).value = 'Total de Aparas:';
+    sheet.getCell(`F${ultimaLinha + 1}`).font = { bold: true };
+    sheet.getCell(`F${ultimaLinha + 1}`).alignment = { horizontal: 'right' };
+    sheet.getCell(`F${ultimaLinha + 1}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF00B050' }
+    };
+    sheet.getCell(`H${ultimaLinha + 1}`).value = totalAparas;
+    sheet.getCell(`H${ultimaLinha + 1}`).font = { bold: true };
+    sheet.getCell(`H${ultimaLinha + 1}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF99' }
+    };
+
+    // Enviar arquivo
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_extrusao.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+////////////////////////
+
+
+app.post('/relatorio/corte', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const { data_inicio, data_fim } = req.body;
+
+    if (!data_inicio || !data_fim) {
+      return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios.' });
+    }
+
+    const query = `
+      SELECT * FROM corte_ficha 
+      WHERE preenchido_em BETWEEN ? AND ?
+    `;
+    const [dados] = await connection.query(query, [data_inicio, data_fim]);
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Corte');
+
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    // Colunas sem 'inicio' e 'termino'
+    sheet.columns = [
+      { header: 'Data', key: 'preenchido_em', width: 15 },
+      { header: 'Nome', key: 'operador_nome', width: 25 },
+      { header: 'CPF', key: 'operador_cpf', width: 18 },
+      { header: 'Máquina', key: 'maquina', width: 20 },
+      { header: 'Turno', key: 'turno', width: 18 },
+      { header: 'Produto', key: 'produto', width: 18 },
+      { header: 'Total', key: 'total', width: 10 },
+      { header: 'Aparas', key: 'aparas', width: 10 },
+      { header: 'Obs', key: 'obs', width: 30 },
+    ];
+
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF00B050' },
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    let totalPeso = 0;
+    let totalAparas = 0;
+
+    dados.forEach(d => {
+      const row = sheet.addRow(d);
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+
+      totalPeso += Number(d.total || 0);
+      totalAparas += Number(d.aparas || 0);
+    });
+
+    const ultimaLinha = sheet.rowCount + 1;
+
+    sheet.mergeCells(`E${ultimaLinha}:F${ultimaLinha}`);
+    const totalGeralCell = sheet.getCell(`E${ultimaLinha}`);
+    totalGeralCell.value = 'Total Geral:';
+    totalGeralCell.font = { bold: true };
+    totalGeralCell.alignment = { horizontal: 'right' };
+    totalGeralCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF00B050' },
+    };
+    totalGeralCell.border = borderStyle;
+
+    const valorTotalCell = sheet.getCell(`G${ultimaLinha}`);
+    valorTotalCell.value = totalPeso;
+    valorTotalCell.font = { bold: true };
+    valorTotalCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF99' },
+    };
+    valorTotalCell.border = borderStyle;
+
+    sheet.mergeCells(`E${ultimaLinha + 1}:F${ultimaLinha + 1}`);
+    const totalAparasCell = sheet.getCell(`E${ultimaLinha + 1}`);
+    totalAparasCell.value = 'Total de Aparas:';
+    totalAparasCell.font = { bold: true };
+    totalAparasCell.alignment = { horizontal: 'right' };
+    totalAparasCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF00B050' },
+    };
+    totalAparasCell.border = borderStyle;
+
+    const valorAparasCell = sheet.getCell(`G${ultimaLinha + 1}`);
+    valorAparasCell.value = totalAparas;
+    valorAparasCell.font = { bold: true };
+    valorAparasCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF99' },
+    };
+    valorAparasCell.border = borderStyle;
+
+    sheet.autoFilter = {
+      from: 'A1',
+      to: 'I1',
+    };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_corte.xlsx');
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+
+
+//rota para relatorio de corte
+app.get('/relatorio/corte', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const [dados] = await connection.query('SELECT * FROM corte_ficha');
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Extrusão');
+
+    // Estilo de borda
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    // Cabeçalho
+    sheet.columns = [
+      { header: 'data', key: 'preenchido_em', width: 15 },
+      { header: 'nome', key: 'operador_nome', width: 25 },
+      { header: 'cpf', key: 'operador_cpf', width: 18 },
+      { header: 'maquina', key: 'maquina', width: 20 },
+      { header: 'turno', key: 'turno', width: 18 },
+      { header: 'produto', key: 'sacola_dim', width: 18 },
+      { header: 'total', key: 'total', width: 10 },
+      { header: 'aparas', key: 'aparas', width: 10 },
+      { header: 'obs', key: 'obs', width: 30 },
+    ];
+
+    // Estilo do cabeçalho
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF00B050' } // Verde
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; // Branco
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    // Adicionar dados e somatórios
+    let totalPeso = 0;
+    let totalAparas = 0;
+
+    dados.forEach(d => {
+      const row = sheet.addRow(d);
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+      totalPeso += Number(d.peso || 0);
+      totalAparas += Number(d.aparas || 0);
+    });
+
+    const ultimaLinha = sheet.rowCount + 2;
+
+   // Total Geral (peso) na coluna G (total)
+sheet.mergeCells(`F${ultimaLinha}:F${ultimaLinha}`);
+sheet.getCell(`F${ultimaLinha}`).value = 'Total Geral:';
+sheet.getCell(`F${ultimaLinha}`).font = { bold: true };
+sheet.getCell(`F${ultimaLinha}`).alignment = { horizontal: 'right' };
+sheet.getCell(`F${ultimaLinha}`).fill = {
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: { argb: 'FF00B050' }
+};
+sheet.getCell(`G${ultimaLinha}`).value = totalPeso;
+sheet.getCell(`G${ultimaLinha}`).font = { bold: true };
+sheet.getCell(`G${ultimaLinha}`).fill = {
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: { argb: 'FFFFFF99' }
+};
+
+// Total Aparas na coluna H
+sheet.mergeCells(`F${ultimaLinha + 1}:F${ultimaLinha + 1}`);
+sheet.getCell(`F${ultimaLinha + 1}`).value = 'Total de Aparas:';
+sheet.getCell(`F${ultimaLinha + 1}`).font = { bold: true };
+sheet.getCell(`F${ultimaLinha + 1}`).alignment = { horizontal: 'right' };
+sheet.getCell(`F${ultimaLinha + 1}`).fill = {
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: { argb: 'FF00B050' }
+};
+sheet.getCell(`G${ultimaLinha + 1}`).value = totalAparas;
+sheet.getCell(`G${ultimaLinha + 1}`).font = { bold: true };
+sheet.getCell(`G${ultimaLinha + 1}`).fill = {
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: { argb: 'FFFFFF99' }
+};
+    // Enviar arquivo
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_extrusao.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
   } finally {
     connection.release();
   }
