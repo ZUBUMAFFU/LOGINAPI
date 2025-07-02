@@ -1,6 +1,7 @@
 const express = require('express');
 const { autenticarJWT } = require('./middlewares/authMiddleware');
 const cors = require('cors');
+const bcrypt = require('bcrypt');
 const ExcelJS = require('exceljs');
 require('dotenv').config();
 const app = express();
@@ -40,6 +41,70 @@ app.get('/usuarios', autenticarJWT, async (req, res) => {
     res.status(500).json({ erro: 'Erro interno ao buscar usuários.' });
   }
 });
+app.get('/usuarios/:id', autenticarJWT, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const [rows] = await pool.query('SELECT * FROM usuarios WHERE id = ?', [id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ erro: 'Usuário não encontrado.' });
+    }
+
+    res.status(200).json(rows[0]);
+
+  } catch (err) {
+    console.error('Erro ao buscar usuário por ID:', err.message);
+    res.status(500).json({ erro: 'Erro interno ao buscar usuário.' });
+  }
+});
+
+
+app.post('/usuarios/edit', autenticarJWT, async (req, res) => {
+  try {
+    const { id, nome, cpf, senha, role_id } = req.body;
+
+    if (!id || !nome || !cpf || !role_id) {
+      return res.status(400).json({ erro: 'ID, nome, CPF e role_id são obrigatórios.' });
+    }
+
+    let query = '';
+    let params = [];
+
+    if (senha && senha.trim() !== '') {
+      const saltRounds = 10;
+      const hashSenha = await bcrypt.hash(senha, saltRounds);
+
+      query = `
+        UPDATE usuarios 
+        SET nome = ?, cpf = ?, senha_hash = ?, role_id = ? 
+        WHERE id = ?
+      `;
+      params = [nome, cpf, hashSenha, role_id, id];
+    } else {
+      query = `
+        UPDATE usuarios 
+        SET nome = ?, cpf = ?, role_id = ? 
+        WHERE id = ?
+      `;
+      params = [nome, cpf, role_id, id];
+    }
+
+    const [result] = await pool.query(query, params);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ erro: 'Usuário não encontrado.' });
+    }
+
+    res.json({ mensagem: 'Usuário atualizado com sucesso.' });
+
+  } catch (err) {
+    console.error('Erro ao editar usuário:', err);
+    res.status(500).json({ erro: 'Erro interno ao editar usuário.' });
+  }
+});
+
+
+
 app.post('/usuarios/remove', autenticarJWT, async (req, res) => {
   try {
     const { id } = req.body;
