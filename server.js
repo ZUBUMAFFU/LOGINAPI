@@ -16,6 +16,7 @@ const authRoutes = require('./routes/authRoutes');
 const pool = require('./utils/db');
 app.use('/auth', authRoutes);
 
+
 // Rota protegida de exemplo
 app.get('/perfil', autenticarJWT, (req, res) => {
   res.json({ mensagem: 'Você está autenticado', usuario: req.user });
@@ -289,6 +290,50 @@ app.post('/vendas/vender', autenticarJWT, async (req, res) => {
   }
 });
 
+// Buscar venda por ID
+app.get('/vendas/:id', autenticarJWT, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [result] = await pool.query('SELECT * FROM vendas WHERE id = ?', [id]);
+
+    if (result.length === 0) {
+      return res.status(404).json({ erro: 'Venda não encontrada.' });
+    }
+
+    res.json(result[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar venda.' });
+  }
+});
+
+// Editar venda
+app.post('/vendas/edit', autenticarJWT, async (req, res) => {
+  try {
+    const { id, cliente, produto, valor, peso } = req.body;
+
+    if (!id || !cliente || !produto || valor == null) {
+      return res.status(400).json({ erro: 'Campos obrigatórios não preenchidos.' });
+    }
+
+    const [result] = await pool.query(
+      'UPDATE vendas SET cliente = ?, produto = ?, valor = ?, peso = ? WHERE id = ?',
+      [cliente, produto, valor, peso ?? 0, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ erro: 'Venda não encontrada.' });
+    }
+
+    res.json({ mensagem: 'Venda atualizada com sucesso.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao atualizar venda.' });
+  }
+});
+
+
 app.post('/vendas/periodo', async (req, res) => {
   try {
     const { mesInicio, mesTermino } = req.body;
@@ -422,7 +467,22 @@ app.get('/maquinas', autenticarJWT, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar máquinas.' });
   }
 });
+app.get('/maquinas/:id', autenticarJWT, async (req, res) => {
+  try {
+    const { id } = req.params;
 
+    const [result] = await pool.query('SELECT * FROM maquinas WHERE id = ?', [id]);
+
+    if (result.length === 0) {
+      return res.status(404).json({ erro: 'Máquina não encontrada.' });
+    }
+
+    res.json(result[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar maquina.' });
+  }
+});
 // Adicionar máquina
 app.post('/maquinas/add', autenticarJWT, async (req, res) => {
   try {
