@@ -228,12 +228,27 @@ app.post('/produtos/remove', autenticarJWT, async (req, res) => {
 });
 
 app.get('/vendas', autenticarJWT, async (req, res) => {
+  const page = parseInt(req.query.page) || 1;     // página atual
+  const limit = parseInt(req.query.limit) || 10;  // registros por página
+  const offset = (page - 1) * limit;              // deslocamento
+
   try {
-    const [vendas] = await pool.query('SELECT * FROM vendas');
-    res.json( vendas );
+    // Busca as vendas com limite e offset
+    const [vendas] = await pool.query('SELECT * FROM vendas LIMIT ? OFFSET ?', [limit, offset]);
+
+    // Total de vendas (sem paginação)
+    const [[{ total }]] = await pool.query('SELECT COUNT(*) AS total FROM vendas');
+
+    res.json({
+      data: vendas,
+      page,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
+
   } catch (err) {
     console.error(err);
-    res.status(500).json({ erro: 'Erro ao buscar vendasa.' });
+    res.status(500).json({ erro: 'Erro ao buscar vendas.' });
   }
 });
 app.get('/vendas/total', autenticarJWT, async (req, res) => {
