@@ -251,6 +251,16 @@ app.get('/vendas', autenticarJWT, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar vendas.' });
   }
 });
+app.get('/vendas_all', autenticarJWT, async (req, res) => {
+  try {
+    const [vendas] = await pool.query('SELECT * FROM vendas');
+    res.json({ vendas });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar vendas.' });
+  }
+});
+
 app.get('/vendas/total', autenticarJWT, async (req, res) => {
   try {
     const [resultado] = await pool.query('SELECT SUM(valor) AS total FROM vendas');
@@ -709,7 +719,13 @@ app.post('/ficha_corte/add', autenticarJWT, async (req, res) => {
         obs || null
       ]
     );
-
+    // Atualizar quantidade de sacolas no estoque
+    await connection.query(
+  `UPDATE produtos 
+   SET quantidade = quantidade + ? 
+   WHERE nome = ?`,
+  [totalNum, sacola_dim]
+);
     await connection.commit();
 
     res.status(201).json({ 
@@ -1145,7 +1161,7 @@ app.get('/relatorio/corte', autenticarJWT, async (req, res) => {
         cell.border = borderStyle;
         cell.alignment = { vertical: 'middle', horizontal: 'left' };
       });
-      totalPeso += Number(d.peso || 0);
+      totalPeso += Number(d.total || 0);
       totalAparas += Number(d.aparas || 0);
     });
 
@@ -1188,7 +1204,7 @@ sheet.getCell(`G${ultimaLinha + 1}`).fill = {
 };
     // Enviar arquivo
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_extrusao.xlsx');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_corte.xlsx');
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
