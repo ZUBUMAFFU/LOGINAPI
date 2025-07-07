@@ -1214,5 +1214,320 @@ sheet.getCell(`G${ultimaLinha + 1}`).fill = {
     connection.release();
   }
 });
-//iniciar a aplicação
+
+//relatorio de vendas geral
+app.get('/relatorio/vendas', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const query = `SELECT * FROM vendas`;
+    const [dados] = await connection.query(query);
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Extrusão');
+
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    // Configurar colunas com largura e alinhamento padrão (texto à esquerda, números à direita)
+    sheet.columns = [
+      { header: 'Data', key: 'vendido_em', width: 15, style: { alignment: { horizontal: 'center' } } },
+      { header: 'Cliente', key: 'cliente', width: 20, style: { alignment: { horizontal: 'left' } } },
+      { header: 'Valor (R$)', key: 'valor', width: 15, style: { alignment: { horizontal: 'right' } } },
+      { header: 'Peso (kg)', key: 'peso', width: 15, style: { alignment: { horizontal: 'right' } } },
+      { header: 'Produto', key: 'produto', width: 25, style: { alignment: { horizontal: 'left' } } },
+    ];
+
+    // Estilo cabeçalho
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1F4E78' }, // azul escuro
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    let totalPeso = 0;
+    let totalValor = 0;
+    const totaisPorProduto = {};
+
+    dados.forEach(d => {
+      let pesoNum = Number(String(d.peso).replace(',', '.')) || 0;
+      let valorNum = Number(String(d.valor).replace(',', '.')) || 0;
+
+      const rowData = {
+        ...d,
+        peso: pesoNum,
+        valor: valorNum,
+      };
+
+      const row = sheet.addRow(rowData);
+
+      row.getCell('peso').numFmt = '#,##0.00'; // formato numérico com 2 decimais
+      row.getCell('valor').numFmt = '#,##0.00';
+
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        // Alinhar texto e números apropriadamente
+        if (cell.col === 3 || cell.col === 4) { // valor e peso
+          cell.alignment = { vertical: 'middle', horizontal: 'right' };
+        } else {
+          cell.alignment = { vertical: 'middle', horizontal: 'left' };
+        }
+      });
+
+      totalPeso += pesoNum;
+      totalValor += valorNum;
+
+      const produto = d.produto || 'Não informado';
+      if (!totaisPorProduto[produto]) {
+        totaisPorProduto[produto] = { peso: 0, valor: 0 };
+      }
+      totaisPorProduto[produto].peso += pesoNum;
+      totaisPorProduto[produto].valor += valorNum;
+    });
+
+    // Linha em branco para separar
+    sheet.addRow([]);
+
+    const linhaTotalGeral = sheet.rowCount + 1;
+
+    // Total Geral título
+    sheet.mergeCells(`A${linhaTotalGeral}:B${linhaTotalGeral}`);
+    const celTotalLabel = sheet.getCell(`A${linhaTotalGeral}`);
+    celTotalLabel.value = 'Total Geral';
+    celTotalLabel.font = { bold: true, size: 12 };
+    celTotalLabel.alignment = { horizontal: 'right', vertical: 'middle' };
+    celTotalLabel.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4BACC6' } };
+    celTotalLabel.border = borderStyle;
+
+    // Total Peso
+    const celTotalPeso = sheet.getCell(`C${linhaTotalGeral}`);
+    celTotalPeso.value = totalPeso;
+    celTotalPeso.numFmt = '#,##0.00';
+    celTotalPeso.font = { bold: true };
+    celTotalPeso.alignment = { horizontal: 'right', vertical: 'middle' };
+    celTotalPeso.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+    celTotalPeso.border = borderStyle;
+
+    // Total Valor
+    const celTotalValor = sheet.getCell(`D${linhaTotalGeral}`);
+    celTotalValor.value = totalValor;
+    celTotalValor.numFmt = '#,##0.00';
+    celTotalValor.font = { bold: true };
+    celTotalValor.alignment = { horizontal: 'right', vertical: 'middle' };
+    celTotalValor.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+    celTotalValor.border = borderStyle;
+
+    // Coluna Produto do total geral vazia
+    sheet.getCell(`E${linhaTotalGeral}`).border = borderStyle;
+
+    // Espaço antes do resumo por produto
+    sheet.addRow([]);
+
+    let linhaResumo = sheet.rowCount + 1;
+
+    // Título Totais por Produto
+    sheet.mergeCells(`A${linhaResumo}:E${linhaResumo}`);
+    const celResumoTitle = sheet.getCell(`A${linhaResumo}`);
+    celResumoTitle.value = 'Totais por Produto';
+    celResumoTitle.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+    celResumoTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF8064A2' } };
+    celResumoTitle.alignment = { horizontal: 'center', vertical: 'middle' };
+    celResumoTitle.border = borderStyle;
+
+    linhaResumo++;
+    // Cabeçalhos do resumo
+    sheet.getRow(linhaResumo).values = ['Produto', 'Total Peso', 'Total Valor'];
+    ['A', 'B', 'C'].forEach(col => {
+      const cel = sheet.getCell(`${col}${linhaResumo}`);
+      cel.font = { bold: true };
+      cel.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+      cel.alignment = { horizontal: col === 'A' ? 'left' : 'right', vertical: 'middle' };
+      cel.border = borderStyle;
+    });
+
+    Object.entries(totaisPorProduto).forEach(([produto, total], i) => {
+      const linhaAtual = linhaResumo + 1 + i;
+      sheet.getCell(`A${linhaAtual}`).value = produto;
+      sheet.getCell(`B${linhaAtual}`).value = total.peso;
+      sheet.getCell(`C${linhaAtual}`).value = total.valor;
+
+      sheet.getCell(`B${linhaAtual}`).numFmt = '#,##0.00';
+      sheet.getCell(`C${linhaAtual}`).numFmt = '#,##0.00';
+
+      ['A', 'B', 'C'].forEach(col => {
+        const cell = sheet.getCell(`${col}${linhaAtual}`);
+        cell.border = borderStyle;
+        cell.alignment = col === 'A' ? { horizontal: 'left' } : { horizontal: 'right' };
+      });
+    });
+
+    // Ajuste final para altura das linhas (opcional)
+    sheet.eachRow(row => {
+      row.height = 20;
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_extrusao.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+
+
+
+//relatorio de vendas por periodo
+app.post('/relatorio/vendas/periodo', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const { data_inicio, data_fim } = req.body;
+
+    if (!data_inicio || !data_fim) {
+      return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios.' });
+    }
+
+    const query = `
+      SELECT * FROM vendas
+      WHERE vendido_em BETWEEN ? AND ?
+    `;
+    const [dados] = await connection.query(query, [data_inicio, data_fim]);
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Extrusão');
+
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    sheet.columns = [
+      { header: 'Data', key: 'vendido_em', width: 15 },
+      { header: 'Cliente', key: 'cliente', width: 18 },
+      { header: 'Valor', key: 'valor', width: 20 },
+      { header: 'Peso', key: 'peso', width: 12 },
+      { header: 'Produto', key: 'produto', width: 18 },
+    ];
+
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF00B050' }
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    let totalPeso = 0;
+    const totaisPorProduto = {};
+
+    dados.forEach(d => {
+      const row = sheet.addRow(d);
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+
+      totalPeso += Number(d.peso || 0);
+
+      const produto = d.produto || 'Não informado';
+      if (!totaisPorProduto[produto]) {
+        totaisPorProduto[produto] = { peso: 0, valor: 0 };
+      }
+      totaisPorProduto[produto].peso += Number(d.peso || 0);
+      totaisPorProduto[produto].valor += Number(d.valor || 0);
+    });
+
+    const ultimaLinha = sheet.rowCount + 2;
+
+    // Total Geral
+    sheet.mergeCells(`F${ultimaLinha}:G${ultimaLinha}`);
+    sheet.getCell(`F${ultimaLinha}`).value = 'Total Geral:';
+    sheet.getCell(`F${ultimaLinha}`).font = { bold: true };
+    sheet.getCell(`F${ultimaLinha}`).alignment = { horizontal: 'right' };
+    sheet.getCell(`F${ultimaLinha}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF00B050' }
+    };
+    sheet.getCell(`H${ultimaLinha}`).value = totalPeso;
+    sheet.getCell(`H${ultimaLinha}`).font = { bold: true };
+    sheet.getCell(`H${ultimaLinha}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF99' }
+    };
+
+    // Totais por Produto
+    let linhaResumo = ultimaLinha + 3;
+
+    sheet.mergeCells(`F${linhaResumo}:H${linhaResumo}`);
+    sheet.getCell(`F${linhaResumo}`).value = 'Totais por Produto';
+    sheet.getCell(`F${linhaResumo}`).font = { bold: true };
+    sheet.getCell(`F${linhaResumo}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    sheet.getCell(`F${linhaResumo}`).alignment = { horizontal: 'center' };
+
+    linhaResumo++;
+    sheet.getCell(`F${linhaResumo}`).value = 'Produto';
+    sheet.getCell(`G${linhaResumo}`).value = 'Total Peso';
+    sheet.getCell(`H${linhaResumo}`).value = 'Total Valor';
+    ['F', 'G', 'H'].forEach(col => {
+      const cell = sheet.getCell(`${col}${linhaResumo}`);
+      cell.font = { bold: true };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFBDD7EE' }
+      };
+      cell.alignment = { horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    Object.entries(totaisPorProduto).forEach(([produto, total], i) => {
+      const linhaAtual = linhaResumo + 1 + i;
+      sheet.getCell(`F${linhaAtual}`).value = produto;
+      sheet.getCell(`G${linhaAtual}`).value = total.peso;
+      sheet.getCell(`H${linhaAtual}`).value = total.valor;
+
+      ['F', 'G', 'H'].forEach(col => {
+        const cell = sheet.getCell(`${col}${linhaAtual}`);
+        cell.border = borderStyle;
+        cell.alignment = { horizontal: 'left' };
+      });
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_extrusao.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+// iniciar aplicação
 app.listen(3000, () => console.log('Servidor rodando na porta 3000'));
