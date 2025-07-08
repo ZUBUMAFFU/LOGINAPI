@@ -133,11 +133,31 @@ app.get('/produtos', autenticarJWT, async (req, res) => {
     let params = [];
 
     if (search) {
-      query += ' WHERE nome LIKE ? LIMIT 10';
-      params.push(`%${search}%`);
+  query += ` WHERE 
+    id LIKE ? OR
+    tipo LIKE ? OR
+    nome LIKE ? OR
+    valor LIKE ? OR
+    descricao LIKE ?
+    LIMIT 10`;
+    
+  const termo = `%${search}%`;
+  params.push(termo, termo, termo, termo, termo);
     }
 
-    const [produtos] = await pool.query(query, params);
+    const [produtos] = await pool.query(query, params); // <-- desestrutura para pegar só os dados
+    res.json(produtos); // <-- envia apenas o array de produtos
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar produtos.' });
+  }
+});
+
+app.get('/produtos_all', autenticarJWT, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM produtos';
+
+    const [produtos] = await pool.query(query);
     res.json(produtos);
   } catch (err) {
     console.error(err);
@@ -147,15 +167,15 @@ app.get('/produtos', autenticarJWT, async (req, res) => {
 // Adicionar produto (mantém igual)
 app.post('/produtos/add', autenticarJWT, async (req, res) => {
   try {
-    const { nome, valor, quantidade, descricao } = req.body;
+    const { nome, valor, quantidade, descricao,tipo} = req.body;
 
-    if (!nome || !valor || !quantidade) {
+    if (!nome || !valor || !quantidade || !tipo) {
       return res.status(400).json({ erro: 'Nome, valor e quantidade são obrigatórios.' });
     }
 
     const [result] = await pool.query(
-      'INSERT INTO produtos (nome, valor, quantidade, descricao) VALUES (?, ?, ?, ?)',
-      [nome, valor, quantidade, descricao || null]
+      'INSERT INTO produtos (nome, valor, quantidade, descricao, tipo) VALUES (?, ?, ?, ?, ?)',
+      [nome, valor, quantidade, descricao || null , tipo]
     );
 
     res.status(201).json({ mensagem: 'Produto adicionado com sucesso.', produtoId: result.insertId });
@@ -398,81 +418,6 @@ app.post('/vendas/periodo', async (req, res) => {
   }
 });
 
-// Rota para buscar materiais
-app.get('/material', autenticarJWT, async (req, res) => {
-  try {
-    const [material] = await pool.query('SELECT * FROM materia_prima');
-    res.json(material);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ erro: 'Erro ao buscar material.' });
-  }
-});
-// Rota para adicionar material
-app.post('/material/add', autenticarJWT, async (req, res) => {
-  try {
-    const { nome, quantidade, descricao } = req.body;
-
-    if (!nome || !quantidade) {
-      return res.status(400).json({ erro: 'Nome e quantidade são obrigatórios.' });
-    }
-
-    const [result] = await pool.query(
-      'INSERT INTO materia_prima (nome, quantidade, descricao) VALUES (?, ?, ?)',
-      [nome, quantidade, descricao || null]
-    );
-
-    res.status(201).json({ mensagem: 'Material adicionado com sucesso.', materialId: result.insertId });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ erro: 'Erro ao adicionar material.' });
-  }
-});
-//rota para editar material
-app.post('/material/edit', autenticarJWT, async (req, res) => {
-  try {
-    const { id, nome, quantidade, descricao } = req.body;
-
-    if (!id || !nome || !quantidade) {
-      return res.status(400).json({ erro: 'ID, nome, valor e quantidade são obrigatórios.' });
-    }
-
-    const [result] = await pool.query(
-      'UPDATE materia_prima SET nome = ?, quantidade = ?, descricao = ? WHERE id = ?',
-      [nome, quantidade, descricao || null, id]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ erro: 'Material não encontrado.' });
-    }
-
-    res.json({ mensagem: 'Material atualizado com sucesso.' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ erro: 'Erro ao atualizar material.' });
-  }
-});
-// Rota para remover material
-app.post('/material/remove', autenticarJWT, async (req, res) => {
-  try {
-    const { id } = req.body;
-
-    if (!id) {
-      return res.status(400).json({ erro: 'ID é obrigatório.' });
-    }
-
-    const [result] = await pool.query('DELETE FROM materia_prima WHERE id = ?', [id]);
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ erro: 'Material não encontrado.' });
-    }
-
-    res.json({ mensagem: 'Material deletado com sucesso.' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ erro: 'Erro ao deletar Material.' });
-  }
-});
 // Buscar máquinas
 app.get('/maquinas', autenticarJWT, async (req, res) => {
   try {
@@ -636,10 +581,10 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
       ]
     );
     await connection.query(
-  `UPDATE produtos 
-   SET quantidade = quantidade + ? 
-   WHERE nome = ?`,
-  [pesoNum, produto]
+    `UPDATE produtos 
+    SET quantidade = quantidade + ?, data_atualizada = NOW() 
+    WHERE nome = ?`,
+    [pesoNum, produto]
 );
     await connection.commit();
     
@@ -1529,5 +1474,292 @@ app.post('/relatorio/vendas/periodo', autenticarJWT, async (req, res) => {
     connection.release();
   }
 });
+
+
+
+//relatorio de produtos
+app.post('/relatorio/produtos', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    
+    const query = `
+      SELECT * FROM produtos
+    `;
+    const [dados] = await connection
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Extrusão');
+
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    sheet.columns = [
+      { header: 'Data', key: 'entrou_em', width: 15 },
+      { header: 'Cliente', key: 'nome', width: 18 },
+      { header: 'Tipo', key: 'tipo', width: 18 },
+      { header: 'Valor', key: 'valor', width: 20 },
+      { header: 'Peso', key: 'quantidade', width: 12 },
+      { header: 'Descrição', key: 'descricao',width: 18 },
+    ];
+
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF00B050' }
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    let totalPeso = 0;
+    const totaisPorProduto = {};
+
+    dados.forEach(d => {
+      const row = sheet.addRow(d);
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+
+      totalPeso += Number(d.peso || 0);
+
+      const produto = d.produto || 'Não informado';
+      if (!totaisPorProduto[produto]) {
+        totaisPorProduto[produto] = { peso: 0, valor: 0 };
+      }
+      totaisPorProduto[produto].peso += Number(d.peso || 0);
+      totaisPorProduto[produto].valor += Number(d.valor || 0);
+    });
+
+    const ultimaLinha = sheet.rowCount + 2;
+
+    // Total Geral
+    sheet.mergeCells(`F${ultimaLinha}:G${ultimaLinha}`);
+    sheet.getCell(`F${ultimaLinha}`).value = 'Total Geral:';
+    sheet.getCell(`F${ultimaLinha}`).font = { bold: true };
+    sheet.getCell(`F${ultimaLinha}`).alignment = { horizontal: 'right' };
+    sheet.getCell(`F${ultimaLinha}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF00B050' }
+    };
+    sheet.getCell(`H${ultimaLinha}`).value = totalPeso;
+    sheet.getCell(`H${ultimaLinha}`).font = { bold: true };
+    sheet.getCell(`H${ultimaLinha}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF99' }
+    };
+
+    // Totais por Produto
+    let linhaResumo = ultimaLinha + 3;
+
+    sheet.mergeCells(`F${linhaResumo}:H${linhaResumo}`);
+    sheet.getCell(`F${linhaResumo}`).value = 'Totais por Produto';
+    sheet.getCell(`F${linhaResumo}`).font = { bold: true };
+    sheet.getCell(`F${linhaResumo}`).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    sheet.getCell(`F${linhaResumo}`).alignment = { horizontal: 'center' };
+
+    linhaResumo++;
+    sheet.getCell(`F${linhaResumo}`).value = 'Produto';
+    sheet.getCell(`G${linhaResumo}`).value = 'Total Peso';
+    sheet.getCell(`H${linhaResumo}`).value = 'Total Valor';
+    ['F', 'G', 'H'].forEach(col => {
+      const cell = sheet.getCell(`${col}${linhaResumo}`);
+      cell.font = { bold: true };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFBDD7EE' }
+      };
+      cell.alignment = { horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    Object.entries(totaisPorProduto).forEach(([produto, total], i) => {
+      const linhaAtual = linhaResumo + 1 + i;
+      sheet.getCell(`F${linhaAtual}`).value = produto;
+      sheet.getCell(`G${linhaAtual}`).value = total.peso;
+      sheet.getCell(`H${linhaAtual}`).value = total.valor;
+
+      ['F', 'G', 'H'].forEach(col => {
+        const cell = sheet.getCell(`${col}${linhaAtual}`);
+        cell.border = borderStyle;
+        cell.alignment = { horizontal: 'left' };
+      });
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_extrusao.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+
+
+//relatorio de produtos
+app.get('/relatorio/produtos', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const query = `SELECT * FROM produtos`;
+    const [dados] = await connection.query(query);
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Produtos');
+
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    // Configurar colunas
+    sheet.columns = [
+      { header: 'Data Entrada', key: 'entrou_em', width: 18 },
+      { header: 'Atualizado em', key: 'data_atualizada', width: 20 },
+      { header: 'Nome', key: 'nome', width: 20 },
+      { header: 'Tipo', key: 'tipo', width: 15 },
+      { header: 'Valor (R$)', key: 'valor', width: 15 },
+      { header: 'Quantidade', key: 'quantidade', width: 15 },
+      { header: 'Descrição', key: 'descricao', width: 25 },
+    ];
+
+    // Estilizar cabeçalho
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1F4E78' }
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    let totalQuantidade = 0;
+    const totaisPorProduto = {};
+
+    dados.forEach(prod => {
+      const quantidade = Number(prod.quantidade) || 0;
+      const valor = Number(prod.valor) || 0;
+
+      const row = sheet.addRow({
+        entrou_em: prod.entrou_em,
+        data_atualizada: prod.data_atualizada,
+        nome: prod.nome,
+        tipo: prod.tipo,
+        valor: valor,
+        quantidade: quantidade,
+        descricao: prod.descricao,
+      });
+
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+
+      row.getCell('valor').numFmt = '#,##0.00';
+      totalQuantidade += quantidade;
+
+      const chave = `${prod.nome} (${prod.tipo})`;
+      if (!totaisPorProduto[chave]) {
+        totaisPorProduto[chave] = { quantidade: 0, valor: 0 };
+      }
+      totaisPorProduto[chave].quantidade += quantidade;
+      totaisPorProduto[chave].valor += valor;
+    });
+
+    // Linha separadora
+    sheet.addRow([]);
+
+    const linhaTotal = sheet.rowCount + 1;
+
+    sheet.mergeCells(`A${linhaTotal}:E${linhaTotal}`);
+    const celTotalLabel = sheet.getCell(`A${linhaTotal}`);
+    celTotalLabel.value = 'Total Geral de Quantidade';
+    celTotalLabel.font = { bold: true };
+    celTotalLabel.alignment = { horizontal: 'right' };
+    celTotalLabel.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4BACC6' } };
+    celTotalLabel.border = borderStyle;
+
+    const celTotal = sheet.getCell(`F${linhaTotal}`);
+    celTotal.value = totalQuantidade;
+    celTotal.font = { bold: true };
+    celTotal.alignment = { horizontal: 'right' };
+    celTotal.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+    celTotal.border = borderStyle;
+
+    // Espaço
+    sheet.addRow([]);
+    let linhaResumo = sheet.rowCount + 1;
+
+    // Cabeçalho Totais por Produto
+    sheet.mergeCells(`A${linhaResumo}:G${linhaResumo}`);
+    const celResumoTitle = sheet.getCell(`A${linhaResumo}`);
+    celResumoTitle.value = 'Totais por Produto';
+    celResumoTitle.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    celResumoTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: 'FF8064A2' };
+    celResumoTitle.alignment = { horizontal: 'center' };
+    celResumoTitle.border = borderStyle;
+
+    linhaResumo++;
+    sheet.getRow(linhaResumo).values = ['Produto', 'Total Quantidade', 'Total Valor'];
+    ['A', 'B', 'C'].forEach(col => {
+      const cell = sheet.getCell(`${col}${linhaResumo}`);
+      cell.font = { bold: true };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+      cell.alignment = { horizontal: col === 'A' ? 'left' : 'right' };
+      cell.border = borderStyle;
+    });
+
+    Object.entries(totaisPorProduto).forEach(([produto, total], i) => {
+      const linha = linhaResumo + 1 + i;
+      sheet.getCell(`A${linha}`).value = produto;
+      sheet.getCell(`B${linha}`).value = total.quantidade;
+      sheet.getCell(`C${linha}`).value = total.valor;
+      sheet.getCell(`C${linha}`).numFmt = '#,##0.00';
+
+      ['A', 'B', 'C'].forEach(col => {
+        const cell = sheet.getCell(`${col}${linha}`);
+        cell.border = borderStyle;
+        cell.alignment = { horizontal: col === 'A' ? 'left' : 'right' };
+      });
+    });
+
+    // Altura padrão
+    sheet.eachRow(row => {
+      row.height = 20;
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_produtos.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+
 // iniciar aplicação
 app.listen(3000, () => console.log('Servidor rodando na porta 3000'));
