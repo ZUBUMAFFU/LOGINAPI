@@ -205,10 +205,12 @@ app.post('/produtos/edit', autenticarJWT, async (req, res) => {
   try {
     const { id, nome, valor, quantidade, descricao } = req.body;
 
-    if (!id || !nome || !valor || !quantidade) {
+    if (!id || !nome) {
       return res.status(400).json({ erro: 'ID, nome, valor e quantidade são obrigatórios.' });
     }
-
+    if (parseFloat(valor) <= 0 || parseFloat(quantidade) < 0) {
+      return res.status(400).json({ erro: 'Valor deve ser maior que zero e quantidade não pode ser negativa.' });
+    }
     const [result] = await pool.query(
       'UPDATE produtos SET nome = ?, valor = ?, quantidade = ?, descricao = ? WHERE id = ?',
       [nome, valor, quantidade, descricao || null, id]
@@ -623,7 +625,12 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
        WHERE id = ?`,
       [pesoNum, id]
     );
-
+    // Inserir registro no histórico de entrada
+    await connection.query(
+      `INSERT INTO historico_entrada (produto_id, quantidade, data_entrada)
+      VALUES (?, ?, ?)`,
+      [id, pesoNum, dataTermino]
+    );
     await connection.commit();
 
     res.status(201).json({
@@ -733,7 +740,12 @@ app.post('/ficha_corte/add', autenticarJWT, async (req, res) => {
        WHERE id = ?`,
       [totalNum, idNum]
     );
-
+    // Inserir registro no histórico de entrada
+    await connection.query(
+    `INSERT INTO historico_entrada (produto_id, quantidade, data_entrada)
+    VALUES (?, ?, ?)`,
+    [idNum, totalNum, new Date()]
+  );
     await connection.commit();
 
     res.status(201).json({
@@ -1821,6 +1833,47 @@ app.get('/relatorio/produtos', autenticarJWT, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+app.get('/historico/entrada', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const { mes } = req.query;
+
+    let query;
+    let params = [];
+
+    if (mes) {
+      // Filtrar por mês e agrupar por dia
+      query = `
+        SELECT 
+          DAY(data_entrada) AS dia,
+          SUM(quantidade) AS total
+        FROM historico_entrada
+        WHERE MONTH(data_entrada) = ?
+        GROUP BY dia
+        ORDER BY dia
+      `;
+      params = [mes];
+    } else {
+      // Sem filtro = retorna agrupado por mês
+      query = `
+        SELECT 
+          MONTH(data_entrada) - 1 AS mes, 
+          SUM(quantidade) AS total
+        FROM historico_entrada
+        GROUP BY mes
+        ORDER BY mes
+      `;
+    }
+
+    const [dados] = await connection.query(query, params);
+    res.json(dados);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar histórico de entradas.' });
   } finally {
     connection.release();
   }
