@@ -546,10 +546,10 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
       peso,
       aparas,
       obs,
-      id  // novo campo para id do produto
+      id  // id do produto
     } = req.body;
 
-    // Validação básica de campos obrigatórios
+    // Validação de campos obrigatórios
     if (
       !operador_nome?.trim() || 
       !operador_cpf?.trim() || 
@@ -558,12 +558,11 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
       !termino || 
       !produto?.trim() || 
       peso === undefined ||
-      !id  // validar id também
+      !id
     ) {
       return res.status(400).json({ erro: 'Todos os campos obrigatórios devem ser preenchidos.' });
     }
 
-    // Validação numérica do peso e aparas
     const pesoNum = parseFloat(peso);
     if (isNaN(pesoNum) || pesoNum < 0) {
       return res.status(400).json({ erro: 'O peso deve ser um número válido e não negativo.' });
@@ -577,7 +576,6 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
       }
     }
 
-    // Validação das datas
     const dataInicio = new Date(inicio);
     const dataTermino = new Date(termino);
     if (isNaN(dataInicio.getTime()) || isNaN(dataTermino.getTime())) {
@@ -589,7 +587,7 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
 
     await connection.beginTransaction();
 
-    // Verificar se o produto existe pelo id
+    // Verificar se o produto existe
     const [produtosEncontrados] = await connection.query(
       'SELECT nome FROM produtos WHERE id = ?',
       [id]
@@ -598,9 +596,10 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
       await connection.rollback();
       return res.status(404).json({ erro: 'Produto não encontrado.' });
     }
+
     const nomeProduto = produtosEncontrados[0].nome;
 
-    // Inserir ficha de extrusão (armazenando o nome do produto para histórico)
+    // Inserir ficha
     const [result] = await connection.query(
       `INSERT INTO work_ficha 
         (operador_nome, operador_cpf, operador_maquina, inicio, termino, produto, peso, aparas, obs) 
@@ -613,30 +612,54 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
         dataTermino,
         nomeProduto,
         pesoNum,
-        aparas,
+        aparasNum,
         obs?.trim() || null
       ]
     );
 
-    // Atualizar estoque e data da última atualização pelo id
+    // Atualizar estoque do produto
     await connection.query(
       `UPDATE produtos 
        SET quantidade = quantidade + ?, data_atualizada = NOW() 
        WHERE id = ?`,
       [pesoNum, id]
     );
-    // Inserir registro no histórico de entrada
+
+    // Atualizar estoque do produto "Aparas" (se existir e aparas > 0)
+    if (aparasNum && aparasNum > 0) {
+  const [aparasProduto] = await connection.query(
+    `SELECT id FROM produtos WHERE nome = 'Aparas' LIMIT 1`
+  );
+
+  if (aparasProduto.length > 0) {
+    const aparasId = aparasProduto[0].id;
+
     await connection.query(
-      `INSERT INTO historico_entrada (produto_id, quantidade, data_entrada)
-      VALUES (?, ?, ?)`,
-      [id, pesoNum, dataTermino]
+      `UPDATE produtos 
+       SET quantidade = quantidade + ?, data_atualizada = NOW()
+       WHERE id = ?`,
+      [aparasNum, aparasId]
     );
+  } else {
+    // Apenas loga e continua — não interrompe a transação
+    console.warn('Produto "Aparas" não encontrado. Atualização de aparas ignorada.');
+  }
+}
+    // Inserir no histórico de entrada
+    await connection.query(
+      `INSERT INTO historico_entrada 
+        (produto_id, quantidade, data_entrada, nome, operador, maquina, aparas)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, pesoNum, new Date(), nomeProduto, operador_nome.trim(), operador_maquina.trim(), aparasNum]
+    );
+
     await connection.commit();
 
     res.status(201).json({
       mensagem: 'Ficha de extrusão adicionada com sucesso.',
       fichaId: result.insertId
     });
+
   } catch (err) {
     await connection.rollback();
 
@@ -651,6 +674,7 @@ app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
       erro: 'Erro ao adicionar ficha de extrusão.',
       detalhes: process.env.NODE_ENV === 'development' ? err.message : null
     });
+
   } finally {
     connection.release();
   }
@@ -740,12 +764,33 @@ app.post('/ficha_corte/add', autenticarJWT, async (req, res) => {
        WHERE id = ?`,
       [totalNum, idNum]
     );
-    // Inserir registro no histórico de entrada
-    await connection.query(
-    `INSERT INTO historico_entrada (produto_id, quantidade, data_entrada)
-    VALUES (?, ?, ?)`,
-    [idNum, totalNum, new Date()]
+     if (aparasNum && aparasNum > 0) {
+  const [aparasProduto] = await connection.query(
+    `SELECT id FROM produtos WHERE nome = 'Aparas' LIMIT 1`
   );
+
+  if (aparasProduto.length > 0) {
+    const aparasId = aparasProduto[0].id;
+
+    await connection.query(
+      `UPDATE produtos 
+       SET quantidade = quantidade + ?, data_atualizada = NOW()
+       WHERE id = ?`,
+      [aparasNum, aparasId]
+    );
+  } else {
+    // Apenas loga e continua — não interrompe a transação
+    console.warn('Produto "Aparas" não encontrado. Atualização de aparas ignorada.');
+  }
+}
+    // Inserir no histórico de entrada
+    await connection.query(
+      `INSERT INTO historico_entrada 
+        (produto_id, quantidade, data_entrada, nome, operador, maquina, aparas)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [idNum, totalNum, new Date(), sacola_dim, operador_nome.trim(), maquina.trim(), aparasNum]
+    );
+    // Inserir registro no histórico de entrada
     await connection.commit();
 
     res.status(201).json({
@@ -1878,6 +1923,62 @@ app.get('/historico/entrada', autenticarJWT, async (req, res) => {
     connection.release();
   }
 });
+app.get('/historico/entrada/v1', autenticarJWT, async (req, res) => {
+  const search = req.query.search || '';
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
 
+  try {
+    let whereClause = '';
+    let params = [];
+
+    if (search) {
+      whereClause = `WHERE 
+        CAST(id AS CHAR) LIKE ? OR
+        CAST(produto_id AS CHAR) LIKE ? OR
+        CAST(quantidade AS CHAR) LIKE ? OR
+        CAST(tipo AS CHAR) LIKE ? OR
+        descricao LIKE ?`;
+      const termo = `%${search}%`;
+      params.push(termo, termo, termo, termo, termo);
+    }
+
+    // Consulta total de registros
+    const countQuery = `SELECT COUNT(*) AS total FROM historico_entrada ${whereClause}`;
+    const [countRows] = await pool.query(countQuery, params);
+    const total = countRows[0].total;
+    const totalPages = Math.ceil(total / limit);
+
+    // Consulta paginada
+    const dataQuery = `SELECT * FROM historico_entrada ${whereClause} LIMIT ? OFFSET ?`;
+    const dataParams = [...params, limit, offset];
+    const [rows] = await pool.query(dataQuery, dataParams);
+
+    res.json({
+      data: rows,
+      totalPages
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar produtos no histórico.' });
+  }
+});
+
+
+
+app.get('/historico/entrada/v2', autenticarJWT, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM historico_entrada';
+
+    const [historico] = await pool.query(query);
+    res.json(historico);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar histórico.' });
+  }
+  
+});
 // iniciar aplicação
 app.listen(3000, () => console.log('Servidor rodando na porta 3000'));
