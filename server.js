@@ -250,29 +250,37 @@ app.post('/produtos/remove', autenticarJWT, async (req, res) => {
 });
 
 app.get('/vendas', autenticarJWT, async (req, res) => {
-  const page = parseInt(req.query.page) || 1;     // página atual
-  const limit = parseInt(req.query.limit) || 10;  // registros por página
-  const offset = (page - 1) * limit;              // deslocamento
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
+  const search = req.query.busca || '';
 
   try {
-    // Busca as vendas com limite e offset
-    const [vendas] = await pool.query('SELECT * FROM vendas LIMIT ? OFFSET ?', [limit, offset]);
+    let where = '';
+    let params = [];
 
-    // Total de vendas (sem paginação)
-    const [[{ total }]] = await pool.query('SELECT COUNT(*) AS total FROM vendas');
+    if (search) {
+      where = `WHERE cliente LIKE ? OR produto LIKE ?`;
+      const termo = `%${search}%`;
+      params.push(termo, termo);
+    }
 
-    res.json({
-      data: vendas,
-      page,
-      total,
-      totalPages: Math.ceil(total / limit)
-    });
+    const [[{ total }]] = await pool.query(`SELECT COUNT(*) AS total FROM vendas ${where}`, params);
+    const totalPages = Math.ceil(total / limit);
 
+    const [rows] = await pool.query(
+      `SELECT * FROM vendas ${where} ORDER BY id ASC LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+
+    res.json({ data: rows, page, total, totalPages });
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao buscar vendas.' });
   }
 });
+
+
 app.get('/vendas_all', autenticarJWT, async (req, res) => {
   try {
     const [vendas] = await pool.query('SELECT * FROM vendas');
@@ -1931,28 +1939,38 @@ app.get('/historico/entrada/v1', autenticarJWT, async (req, res) => {
 
   try {
     let whereClause = '';
-    let params = [];
+    let whereParams = [];
 
     if (search) {
-      whereClause = `WHERE 
-        CAST(id AS CHAR) LIKE ? OR
-        CAST(produto_id AS CHAR) LIKE ? OR
-        CAST(quantidade AS CHAR) LIKE ? OR
-        CAST(tipo AS CHAR) LIKE ? OR
-        descricao LIKE ?`;
+      whereClause = `
+        WHERE 
+          CAST(id AS CHAR) LIKE ? OR
+          CAST(produto_id AS CHAR) LIKE ? OR
+          CAST(quantidade AS CHAR) LIKE ? OR
+          operador LIKE ? OR
+          nome LIKE ? OR
+          maquina LIKE ? OR
+          CAST(data_entrada AS CHAR) LIKE ?
+      `;
       const termo = `%${search}%`;
-      params.push(termo, termo, termo, termo, termo);
+      whereParams = [termo, termo, termo, termo, termo, termo, termo];
     }
 
-    // Consulta total de registros
-    const countQuery = `SELECT COUNT(*) AS total FROM historico_entrada ${whereClause}`;
-    const [countRows] = await pool.query(countQuery, params);
+    const countQuery = `
+      SELECT COUNT(*) AS total FROM historico_entrada
+      ${whereClause.trim()}
+    `;
+    const [countRows] = await pool.query(countQuery, whereParams);
     const total = countRows[0].total;
     const totalPages = Math.ceil(total / limit);
 
-    // Consulta paginada
-    const dataQuery = `SELECT * FROM historico_entrada ${whereClause} LIMIT ? OFFSET ?`;
-    const dataParams = [...params, limit, offset];
+    const dataQuery = `
+      SELECT * FROM historico_entrada
+      ${whereClause.trim()}
+      ORDER BY data_entrada DESC
+      LIMIT ? OFFSET ?
+    `;
+    const dataParams = [...whereParams, limit, offset];
     const [rows] = await pool.query(dataQuery, dataParams);
 
     res.json({
@@ -1968,6 +1986,9 @@ app.get('/historico/entrada/v1', autenticarJWT, async (req, res) => {
 
 
 
+
+
+
 app.get('/historico/entrada/v2', autenticarJWT, async (req, res) => {
   try {
     let query = 'SELECT * FROM historico_entrada';
@@ -1980,5 +2001,84 @@ app.get('/historico/entrada/v2', autenticarJWT, async (req, res) => {
   }
   
 });
+app.get('/historico/entrada/relatorio', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  const search = req.query.search || '';
+
+  try {
+    let whereClause = '';
+    let params = [];
+
+if (search) {
+  whereClause = `
+    WHERE 
+      CAST(id AS CHAR) LIKE ? OR
+      CAST(produto_id AS CHAR) LIKE ? OR
+      CAST(quantidade AS CHAR) LIKE ? OR
+      operador LIKE ? OR
+      nome LIKE ? OR
+      maquina LIKE ? OR
+      CAST(data_entrada AS CHAR) LIKE ?
+  `;
+  const termo = `%${search}%`;
+  params = [termo, termo, termo, termo, termo, termo, termo];
+}
+
+
+    const query = `SELECT * FROM historico_entrada ${whereClause} ORDER BY data_entrada DESC`;
+    const [dados] = await connection.query(query, params);
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Histórico de Entrada');
+
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    sheet.columns = [
+      { header: 'Data', key: 'data_entrada', width: 15 },
+      { header: 'Produto ID', key: 'produto_id', width: 15 },
+      { header: 'Quantidade', key: 'quantidade', width: 12 },
+      { header: 'Aparas', key: 'aparas', width: 15 },
+      { header: 'Operador', key: 'operador', width: 30 },
+      { header: 'Maquina', key: 'maquina', width: 18 },
+    ];
+
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF00B050' } // Verde
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; // Branco
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    dados.forEach(d => {
+      const row = sheet.addRow(d);
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_historico_entrada.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+
 // iniciar aplicação
 app.listen(3000, () => console.log('Servidor rodando na porta 3000'));
