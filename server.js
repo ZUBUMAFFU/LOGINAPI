@@ -529,6 +529,9 @@ app.post('/maquinas/remove', autenticarJWT, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao deletar máquina.' });
   }
 });
+
+
+
 //buscar ficha de extrusão
 app.get('/ficha_extrusao', autenticarJWT, async (req, res) => {
   try {
@@ -539,6 +542,67 @@ app.get('/ficha_extrusao', autenticarJWT, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar fichas de extrusão.' });
   }
 });
+
+
+app.get('/fichas_extrusao/v1', autenticarJWT, async (req, res) => {
+  const search = req.query.search || '';
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
+
+  try {
+    let whereClause = '';
+    let whereParams = [];
+
+    if (search) {
+      whereClause = `
+        WHERE 
+          CAST(id AS CHAR) LIKE ? OR
+          operador_nome LIKE ? OR
+          operador_cpf LIKE ? OR
+          operador_maquina LIKE ? OR
+          produto LIKE ? OR
+          CAST(preenchido_em AS CHAR) LIKE ? OR
+          inicio LIKE ? OR
+          termino LIKE ? OR
+          CAST(peso AS CHAR) LIKE ? OR
+          CAST(aparas AS CHAR) LIKE ? OR
+          obs LIKE ?
+      `;
+      const termo = `%${search}%`;
+      whereParams = Array(11).fill(termo);
+    }
+
+    const countQuery = `
+      SELECT COUNT(*) AS total FROM work_ficha
+      ${whereClause.trim()}
+    `;
+    const [countRows] = await pool.query(countQuery, whereParams);
+    const total = countRows[0].total;
+    const totalPages = Math.ceil(total / limit);
+
+    const dataQuery = `
+      SELECT * FROM work_ficha
+      ${whereClause.trim()}
+      ORDER BY id ASC
+      LIMIT ? OFFSET ?
+    `;
+    const dataParams = [...whereParams, limit, offset];
+    const [rows] = await pool.query(dataQuery, dataParams);
+
+    res.json({
+      data: rows,
+      totalPages
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar fichas de extrusão.' });
+  }
+});
+
+
+
 //rota para adicionar ficha de extrusão
 app.post('/ficha_extrusao/add', autenticarJWT, async (req, res) => {
   const connection = await pool.getConnection();
@@ -700,6 +764,65 @@ app.get('/ficha_corte', autenticarJWT, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao buscar fichas de extrusão.' });
   }
 });
+
+
+app.get('/fichas_corte/v1', autenticarJWT, async (req, res) => {
+  const search = req.query.search || '';
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
+
+  try {
+    let whereClause = '';
+    let whereParams = [];
+
+    if (search) {
+      whereClause = `
+        WHERE 
+          CAST(id AS CHAR) LIKE ? OR
+          operador_nome LIKE ? OR
+          operador_cpf LIKE ? OR
+          maquina LIKE ? OR
+          turno LIKE ? OR
+          sacola_dim LIKE ? OR
+          CAST(total AS CHAR) LIKE ? OR
+          CAST(aparas AS CHAR) LIKE ? OR
+          obs LIKE ? OR
+          CAST(preenchido_em AS CHAR) LIKE ?
+      `;
+      const termo = `%${search}%`;
+      whereParams = Array(10).fill(termo);
+    }
+
+    const countQuery = `
+      SELECT COUNT(*) AS total FROM corte_ficha
+      ${whereClause.trim()}
+    `;
+    const [countRows] = await pool.query(countQuery, whereParams);
+    const total = countRows[0].total;
+    const totalPages = Math.ceil(total / limit);
+
+    const dataQuery = `
+  SELECT * FROM corte_ficha
+  ${whereClause}
+  ORDER BY id ASC
+  LIMIT ? OFFSET ?
+`;
+    const dataParams = [...whereParams, limit, offset];
+    const [rows] = await pool.query(dataQuery, dataParams);
+
+    res.json({
+      data: rows,
+      totalPages
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao buscar fichas de corte.' });
+  }
+});
+
+
 //rota para adicionar ficha de corte
 app.post('/ficha_corte/add', autenticarJWT, async (req, res) => {
   const connection = await pool.getConnection();
@@ -1967,7 +2090,7 @@ app.get('/historico/entrada/v1', autenticarJWT, async (req, res) => {
     const dataQuery = `
       SELECT * FROM historico_entrada
       ${whereClause.trim()}
-      ORDER BY data_entrada DESC
+      ORDER BY id ASC
       LIMIT ? OFFSET ?
     `;
     const dataParams = [...whereParams, limit, offset];
@@ -2079,6 +2202,247 @@ if (search) {
     connection.release();
   }
 });
+
+
+
+
+app.get('/fichas_extrusao/v1/relatorio', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  const search = req.query.search || '';
+
+  try {
+    let whereClause = '';
+    let params = [];
+
+    if (search) {
+      whereClause = `
+        WHERE 
+          CAST(id AS CHAR) LIKE ? OR
+          operador_nome LIKE ? OR
+          operador_cpf LIKE ? OR
+          operador_maquina LIKE ? OR
+          produto LIKE ? OR
+          inicio LIKE ? OR
+          termino LIKE ? OR
+          CAST(peso AS CHAR) LIKE ? OR
+          CAST(aparas AS CHAR) LIKE ? OR
+          obs LIKE ? OR
+          CAST(preenchido_em AS CHAR) LIKE ?
+      `;
+      const termo = `%${search}%`;
+      params = Array(11).fill(termo);
+    }
+
+    const query = `SELECT * FROM work_ficha ${whereClause} ORDER BY preenchido_em DESC`;
+    const [dados] = await connection.query(query, params);
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Fichas de Extrusão');
+
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    sheet.columns = [
+      { header: 'ID', key: 'id', width: 8 },
+      { header: 'Operador', key: 'operador_nome', width: 25 },
+      { header: 'CPF', key: 'operador_cpf', width: 18 },
+      { header: 'Máquina', key: 'operador_maquina', width: 20 },
+      { header: 'Produto', key: 'produto', width: 25 },
+      { header: 'Peso (kg)', key: 'peso', width: 12 },
+      { header: 'Aparas (kg)', key: 'aparas', width: 14 },
+      { header: 'Início', key: 'inicio', width: 20 },
+      { header: 'Término', key: 'termino', width: 20 },
+      { header: 'Observações', key: 'obs', width: 30 },
+      { header: 'Preenchido em', key: 'preenchido_em', width: 20 },
+    ];
+
+    // Cabeçalho
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF00B050' } // Verde
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; // Branco
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    let totalPeso = 0;
+    let totalAparas = 0;
+
+    // Linhas
+    dados.forEach(d => {
+      totalPeso += Number(d.peso) || 0;
+      totalAparas += Number(d.aparas) || 0;
+
+      const row = sheet.addRow(d);
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+    });
+
+    // Linha de totais
+    const totalRow = sheet.addRow({
+      produto: 'TOTAIS:',
+      peso: totalPeso,
+      aparas: totalAparas,
+    });
+
+    totalRow.eachCell((cell, colNumber) => {
+      cell.border = borderStyle;
+      cell.font = { bold: true };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFFF00' }, // Amarelo
+      };
+      if (colNumber === 5 || colNumber === 6) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_fichas_extrusao.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+
+
+app.get('/fichas_corte/v1/relatorio', autenticarJWT, async (req, res) => {
+  const connection = await pool.getConnection();
+  const search = req.query.search || '';
+
+  try {
+    let whereClause = '';
+    let params = [];
+
+    if (search) {
+      whereClause = `
+        WHERE 
+          CAST(id AS CHAR) LIKE ? OR
+          operador_nome LIKE ? OR
+          operador_cpf LIKE ? OR
+          maquina LIKE ? OR
+          turno LIKE ? OR
+          sacola_dim LIKE ? OR
+          CAST(total AS CHAR) LIKE ? OR
+          CAST(aparas AS CHAR) LIKE ? OR
+          obs LIKE ? OR
+          CAST(preenchido_em AS CHAR) LIKE ?
+      `;
+      const termo = `%${search}%`;
+      params = Array(10).fill(termo);
+    }
+
+    const query = `SELECT * FROM corte_ficha ${whereClause} ORDER BY preenchido_em DESC`;
+    const [dados] = await connection.query(query, params);
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Fichas de Corte');
+
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+
+    sheet.columns = [
+      { header: 'ID', key: 'id', width: 8 },
+      { header: 'Operador', key: 'operador_nome', width: 25 },
+      { header: 'CPF', key: 'operador_cpf', width: 18 },
+      { header: 'Máquina', key: 'maquina', width: 20 },
+      { header: 'Turno', key: 'turno', width: 15 },
+      { header: 'Dim. Sacola', key: 'sacola_dim', width: 20 },
+      { header: 'Total (kg)', key: 'total', width: 14 },
+      { header: 'Aparas (kg)', key: 'aparas', width: 14 },
+      { header: 'Observações', key: 'obs', width: 30 },
+      { header: 'Preenchido em', key: 'preenchido_em', width: 22 },
+    ];
+
+    // Cabeçalho
+    sheet.getRow(1).eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF0070C0' } // Azul
+      };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }; // Branco
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = borderStyle;
+    });
+
+    let totalGeral = 0;
+    let aparasGeral = 0;
+
+    dados.forEach(d => {
+      totalGeral += Number(d.total) || 0;
+      aparasGeral += Number(d.aparas) || 0;
+
+      const row = sheet.addRow({
+        ...d,
+        preenchido_em: new Date(d.preenchido_em).toLocaleString('pt-BR'),
+      });
+
+      row.eachCell(cell => {
+        cell.border = borderStyle;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      });
+    });
+
+    // Linha de totais
+    const totalRow = sheet.addRow({
+      sacola_dim: 'TOTAIS:',
+      total: totalGeral,
+      aparas: aparasGeral,
+    });
+
+    totalRow.eachCell((cell, colNumber) => {
+      cell.border = borderStyle;
+      cell.font = { bold: true };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFFF00' }, // Amarelo
+      };
+      if (colNumber === 7 || colNumber === 8) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_fichas_corte.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao gerar planilha.' });
+  } finally {
+    connection.release();
+  }
+});
+
+
 
 // iniciar aplicação
 app.listen(3000, () => console.log('Servidor rodando na porta 3000'));
